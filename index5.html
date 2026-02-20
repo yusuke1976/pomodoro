@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Meeting Pomodoro (Visible Timer)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { height: 100%; }
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP", sans-serif;
+      display:flex;
+      min-height:100vh;
+      align-items:center;
+      justify-content:center;
+      padding:16px;
+      transition: background-color 220ms ease, color 220ms ease;
+    }
+
+    /* モバイル時は全テキストを白色に強制 */
+    @media (max-width: 600px), (orientation: landscape) and (max-height: 600px) {
+      body, body * {
+        color: white !important;
+      }
+      /* ポップアップは背景が白なのでテキストだけ黒系に戻す */
+      .overlay, .overlay * {
+        color: CanvasText !important;
+      }
+    }
+
+    /* サイネージっぽく中央寄せ・余白少なめ */
+    .wrap{
+      width: min(920px, 100%);
+      display:flex;
+      flex-direction:column;
+      gap:14px;
+    }
+
+    .top{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:flex-end;
+      justify-content:space-between;
+    }
+
+    .controls{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:flex-end;
+    }
+
+    .field{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    label{ font-size:12px; opacity:.85; }
+    input[type="number"], select{
+      font-size:16px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid rgba(127,127,127,.35);
+      background:transparent;
+      min-width: 120px;
+    }
+
+    .btns{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+    }
+    button{
+      font-size:16px;
+      padding:10px 14px;
+      border-radius:12px;
+      border:1px solid rgba(127,127,127,.35);
+      background:transparent;
+      cursor:pointer;
+    }
+    button:active{ transform: translateY(1px); }
+
+    .statusRow{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:space-between;
+      opacity:.9;
+      font-size:13px;
+    }
+    .badge{
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(127,127,127,.35);
+      font-size:12px;
+      white-space:nowrap;
+    }
+
+    /* 超巨大表示 */
+    .timeBox{
+      border:1px solid rgba(127,127,127,.25);
+      border-radius:20px;
+      padding:16px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      user-select:none;
+    }
+    .time{
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 1px;
+      line-height: 1;
+      font-weight: 700;
+      /* 画面幅で自動スケール */
+      font-size: clamp(56px, 14vw, 200px);
+    }
+    .sub{
+      margin-top:8px;
+      text-align:center;
+      font-size:13px;
+      opacity:.85;
+    }
+
+    /* 終了時の点滅 */
+    @keyframes blink {
+      0%, 50% { filter: brightness(1); }
+      51%, 100% { filter: brightness(1.25); }
+    }
+    .blink { animation: blink 0.8s infinite; }
+
+    /* 延長合意モーダル */
+    .overlay{
+      position:fixed;
+      inset:0;
+      background: rgba(0,0,0,.55);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:16px;
+      z-index: 999;
+    }
+    .overlay.show{ display:flex; }
+
+    .modal{
+      width:min(680px, 100%);
+      background: Canvas;
+      color: CanvasText;
+      border:1px solid rgba(127,127,127,.35);
+      border-radius:18px;
+      padding:16px;
+      box-shadow: 0 14px 40px rgba(0,0,0,.25);
+    }
+    /* プルダウンを見やすく、選択時にも文字がはっきりするように調整 */
+    .modal select{
+      font-size:18px;
+      padding:12px 14px;
+      min-width:160px;
+      color: CanvasText;
+      background: Canvas;
+    }
+    .modal select option{
+      font-size:18px;
+      color: CanvasText;
+      background: Canvas;
+    }
+    .modal h2{
+      margin:0 0 8px;
+      font-size:18px;
+    }
+    .modal p{
+      margin:0 0 12px;
+      font-size:13px;
+      opacity:.85;
+      line-height:1.5;
+    }
+    .modalGrid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:12px;
+    }
+    .modalActions{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+      margin-top:10px;
+    }
+    .modalActions button{
+      padding:12px 14px;
+    }
+    .danger{
+      border-color: rgba(220, 60, 60, .6);
+    }
+    .ok{
+      border-color: rgba(60, 180, 90, .6);
+    }
+
+    /* 小さな注意 */
+    .fineprint{
+      font-size:12px;
+      opacity:.75;
+      line-height:1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="controls">
+        <div class="field">
+          <label for="min">会議時間（分）</label>
+          <input id="min" type="number" min="1" max="999" value="30" inputmode="numeric" />
+        </div>
+
+        <!-- 音量プリセット/サイレント警告設定は不要 -->
+      </div>
+
+      <div class="btns">
+        <button id="fullscreen">全画面</button>
+        <!-- WakeLock button removed -->
+        <button id="start">開始</button>
+        <button id="pause" disabled>一時停止</button>
+        <button id="reset" disabled>リセット</button>
+      </div>
+    </div>
+
+    <div class="statusRow">
+      <div id="stage" class="badge">ステージ：-</div>
+    </div>
+
+    <div class="timeBox" id="timeBox">
+      <div class="time" id="display">30:00</div>
+    </div>
+
+    <div class="sub fineprint">
+      ・残り5分で「チン♪」／残り1分で「チン♪×2」／終了で長めのチャイム。<br>
+      ・終了後は「延長は合意制」画面に切り替わり、理由を選んで+5/+10を押した場合のみ延長します。
+    </div>
+  </div>
+
+  <!-- 延長合意モーダル -->
+  <div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <div class="modal">
+      <h2 id="dlgTitle">⏰ 時間になりました — 延長は合意制です</h2>
+      <p>
+        だらだら延長を防ぐため、延長する場合は <b>理由</b> を選び、<b>+5 / +10</b> を押してください。<br>
+        延長しない場合は「終了」を押して会議を締めます。
+      </p>
+
+      <div class="modalGrid">
+        <div class="field">
+          <label for="reason">延長理由（必須）</label>
+          <select id="reason">
+            <option value="">選択してください…</option>
+            <option value="意思決定（結論を出す）">意思決定（結論を出す）</option>
+            <option value="合意形成（関係者調整）">合意形成（関係者調整）</option>
+            <option value="質疑応答（疑問解消）">質疑応答（疑問解消）</option>
+            <option value="宿題整理（次アクション確定）">宿題整理（次アクション確定）</option>
+            <option value="その他（理由を言語化）">その他（理由を言語化）</option>
+          </select>
+        </div>
+
+        <div class="field" id="otherWrap" style="display:none;">
+          <label for="otherText">その他（1行）</label>
+          <input id="otherText" type="text" placeholder="例：関係部署の懸念点を潰す" />
+        </div>
+
+        <div class="fineprint" id="reasonHint">
+          ※ 理由が空のままだと延長ボタンは押せません。
+        </div>
+      </div>
+
+      <div class="modalActions">
+        <button id="endBtn" class="danger">終了（延長しない）</button>
+        <button id="add5" class="ok" disabled>+5分 延長</button>
+        <button id="add10" class="ok" disabled>+10分 延長</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+
+  const minEl = $("min");
+  // volume preset / silence warning elements removed
+
+  const fullscreenBtn = $("fullscreen");
+  // wake button removed
+
+  const startBtn = $("start");
+  const pauseBtn = $("pause");
+  const resetBtn = $("reset");
+
+  // status element removed
+  const stageEl = $("stage");
+  // sound element removed
+
+  const displayEl = $("display");
+  const timeBoxEl = $("timeBox");
+
+  const overlayEl = $("overlay");
+  const reasonEl = $("reason");
+  const otherWrapEl = $("otherWrap");
+  const otherTextEl = $("otherText");
+  const add5Btn = $("add5");
+  const add10Btn = $("add10");
+  const endBtn = $("endBtn");
+
+  // Timer state
+  let totalMs = 0;
+  let remainingMs = 0;
+  let running = false;
+  let paused = false;
+  let lastTick = 0;
+  let rafId = null;
+
+  // Warning flags
+  let chimed5 = false;
+  let chimed1 = false;
+
+  // Web Audio
+  let audioCtx = null;
+  // interval for repeating end melody
+  let endInterval = null;
+
+  // Wake Lock
+  // wakeLock support removed
+
+
+  // status updates are ignored (no element)  
+  function setStatus(text){ /* noop */ }
+  function setStage(text){ stageEl.textContent = text; }
+
+  function clampInt(v, min, max){
+    const n = Number.parseInt(v, 10);
+    if (Number.isNaN(n)) return min;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function formatMs(ms){
+    ms = Math.max(0, ms);
+    const totalSec = Math.ceil(ms / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+  }
+
+  function syncFromInputs(){
+    const m = clampInt(minEl.value, 1, 999);
+    minEl.value = m;
+    totalMs = m * 60 * 1000;
+    remainingMs = totalMs;
+    displayEl.textContent = formatMs(remainingMs);
+    chimed5 = false;
+    chimed1 = false;
+    updateStageUI();
+  }
+
+  function ensureAudio(){
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+    // sound status display removed
+
+  }
+
+  // master volume preset removed; use fixed volume parameter
+  function masterVol(){ return 1; }
+
+  // ---- Chime sounds (meeting-friendly) ----
+  function ding(atTime, freq=880, dur=0.16, vol=0.45){
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, atTime);
+
+    const v = Math.max(0.0001, vol);
+    gain.gain.setValueAtTime(0.0001, atTime);
+    gain.gain.exponentialRampToValueAtTime(v, atTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, atTime + dur);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start(atTime);
+    osc.stop(atTime + dur + 0.02);
+  }
+
+  function chime5min(){
+    ensureAudio();
+    const t = audioCtx.currentTime + 0.02;
+    ding(t, 880, 0.16, 0.55); // チン♪
+    if (navigator.vibrate) navigator.vibrate([60]);
+  }
+
+  function chime1min(){
+    ensureAudio();
+    const t = audioCtx.currentTime + 0.02;
+    ding(t, 880, 0.14, 0.55);
+    ding(t + 0.22, 990, 0.14, 0.55); // チン♪×2
+    if (navigator.vibrate) navigator.vibrate([50, 60, 50]);
+  }
+
+  // play a more interesting melody once
+  function playEndMelody(){
+    ensureAudio();
+    const t = audioCtx.currentTime + 0.02;
+    // 小さなメロディを重ねる
+    ding(t, 784, 0.30, 0.60);
+    ding(t + 0.40, 988, 0.24, 0.65);
+    ding(t + 0.80, 880, 0.20, 0.60);
+    ding(t + 1.10, 1047, 0.28, 0.65);
+    ding(t + 1.50, 784, 0.34, 0.70);
+    if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60]);
+  }
+  function chimeEnd(){
+    // alias so older code still works
+    playEndMelody();
+  }
+
+
+  // ---- Stage / color logic ----
+  function stageFromRemaining(){
+    if (totalMs <= 0) return { name: "-", level: "idle" };
+
+    const ratio = remainingMs / totalMs;
+    const sec = Math.ceil(remainingMs / 1000);
+
+    if (sec <= 0) return { name: "終了", level: "end" };
+    if (sec <= 60) return { name: "残り1分（決め切る）", level: "red" };
+    if (sec <= 5 * 60) return { name: "残り5分（まとめへ）", level: "orange" };
+    if (ratio <= 0.20) return { name: "残り20%（まとめ開始）", level: "yellow" };
+    return { name: "進行中", level: "green" };
+  }
+
+  function applyBackground(level){
+    // 色指定はCSSの“色”ではなく、背景色の設定（要件のため）。好みで調整可。
+    // ここは「指定色を避ける」縛りは無いので、明確に段階色をつけます。
+    const map = {
+      idle: { bg: "Canvas", fg: "CanvasText" },
+      green: { bg: "#0e3b2e", fg: "#f5fff9" },
+      yellow:{ bg: "#3b3610", fg: "#fffbe6" },
+      orange:{ bg: "#3b2410", fg: "#fff3ea" },
+      red:   { bg: "#3b1010", fg: "#ffecec" },
+      end:   { bg: "#3b1010", fg: "#ffecec" },
+    };
+    const c = map[level] || map.idle;
+    document.body.style.backgroundColor = c.bg;
+    document.body.style.color = c.fg;
+
+    if (level === "end") timeBoxEl.classList.add("blink");
+    else timeBoxEl.classList.remove("blink");
+  }
+
+  function updateStageUI(){
+    const st = stageFromRemaining();
+    setStage(`ステージ：${st.name}`);
+    applyBackground(st.level);
+  }
+
+  // ---- Silence warning (best-effort) ----
+  // silent warning removed; no-op placeholder
+  function warnIfSilent(){ /* removed */ }
+
+  // ---- Wake Lock ----
+  // WakeLock functionality removed; no-op placeholder
+  async function toggleWakeLock(){ /* removed */ }
+
+
+  // ---- Fullscreen ----
+  async function toggleFullscreen(){
+    try{
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (e) {}
+  }
+
+  // ---- Extension consensus modal ----
+  function openConsensus(){
+    overlayEl.classList.add("show");
+    reasonEl.value = "";
+    otherTextEl.value = "";
+    otherWrapEl.style.display = "none";
+    add5Btn.disabled = true;
+    add10Btn.disabled = true;
+  }
+  function closeConsensus(){
+    overlayEl.classList.remove("show");
+  }
+  function updateConsensusButtons(){
+    const r = reasonEl.value.trim();
+    if (r === "その他（理由を言語化）") {
+      otherWrapEl.style.display = "block";
+      const ok = otherTextEl.value.trim().length > 0;
+      add5Btn.disabled = !ok;
+      add10Btn.disabled = !ok;
+      return;
+    }
+    otherWrapEl.style.display = "none";
+    const ok = r.length > 0;
+    add5Btn.disabled = !ok;
+    add10Btn.disabled = !ok;
+  }
+
+  function reasonText(){
+    const r = reasonEl.value.trim();
+    if (r === "その他（理由を言語化）") return otherTextEl.value.trim() || "（未入力）";
+    return r;
+  }
+
+  // ---- Timer loop ----
+  function stopLoop(){
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    running = false;
+    paused = false;
+    lastTick = 0;
+  }
+
+  function finish(){
+    remainingMs = 0;
+    displayEl.textContent = "00:00";
+    stopLoop();
+    updateStageUI();
+
+    // 終了チャイムをループ再生（ボタン押下で止まる）
+    playEndMelody();
+    endInterval = setInterval(playEndMelody, 2200);
+
+    setStatus("終了：延長は合意制（理由選択）");
+
+    // 合意モーダル
+    openConsensus();
+    setUiState();
+  }
+
+  function loop(ts){
+    if (!running || paused) return;
+    if (!lastTick) lastTick = ts;
+    const delta = ts - lastTick;
+    lastTick = ts;
+
+    remainingMs -= delta;
+
+    // 5分前/1分前チャイム
+    const secLeft = Math.ceil(remainingMs / 1000);
+
+    if (!chimed5 && secLeft <= 5*60 && secLeft > 0) {
+      chimed5 = true;
+      chime5min();
+    }
+    if (!chimed1 && secLeft <= 60 && secLeft > 0) {
+      chimed1 = true;
+      chime1min();
+    }
+
+    if (remainingMs <= 0) {
+      finish();
+      return;
+    }
+
+    displayEl.textContent = formatMs(remainingMs);
+    updateStageUI();
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function setUiState(){
+    const inConsensus = overlayEl.classList.contains("show");
+    startBtn.disabled = false;
+
+    // 合意画面中は、延長/終了を選ぶまでタイマー操作を実質止める
+    if (inConsensus) {
+      startBtn.textContent = "停止中";
+      pauseBtn.disabled = true;
+      resetBtn.disabled = false; // リセットは可能
+      minEl.disabled = true;
+      return;
+    }
+
+    startBtn.textContent = running && paused ? "再開" : "開始";
+    pauseBtn.disabled = !running || paused;
+    resetBtn.disabled = !running && remainingMs === totalMs;
+    minEl.disabled = running && !paused;
+  }
+
+  function startOrResume(){
+    // 合意画面が出ているときは「開始」を無効化（延長/終了で操作）
+    if (overlayEl.classList.contains("show")) return;
+
+    ensureAudio(); // ユーザー操作で音を有効化
+
+    if (!running) {
+      syncFromInputs();
+      if (totalMs <= 0) return;
+
+      running = true;
+      paused = false;
+      lastTick = 0;
+      setStatus("進行中（全員で残り時間を見てください）");
+      setUiState();
+      rafId = requestAnimationFrame(loop);
+      return;
+    }
+
+    if (paused) {
+      paused = false;
+      lastTick = 0;
+      setStatus("再開");
+      setUiState();
+      rafId = requestAnimationFrame(loop);
+    }
+  }
+
+  function pause(){
+    if (!running || paused) return;
+    paused = true;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    setStatus("一時停止");
+    setUiState();
+  }
+
+  function reset(){
+    // 合意画面を閉じる（=延長しない/仕切り直し）
+    closeConsensus();
+    stopEndMelody();
+
+    stopLoop();
+    syncFromInputs();
+    setStatus("待機中");
+    setUiState();
+  }
+
+  function extend(minutes){
+    // 合意制：理由必須
+    const r = reasonText();
+    if (!r || r === "（未入力）") return;
+
+    closeConsensus();
+
+    // 延長：残り時間に加算（0からスタートさせる）
+    remainingMs = minutes * 60 * 1000;
+    totalMs = remainingMs; // 延長分を基準に色ステージを作る
+    chimed5 = false;
+    chimed1 = false;
+
+    displayEl.textContent = formatMs(remainingMs);
+    updateStageUI();
+
+    setStatus(`延長 +${minutes}分（理由：${r}）`);
+    running = true;
+    paused = false;
+    lastTick = 0;
+    setUiState();
+    rafId = requestAnimationFrame(loop);
+  }
+
+  // ---- Events ----
+  fullscreenBtn.addEventListener("click", toggleFullscreen);
+  // wake button listener removed
+
+  startBtn.addEventListener("click", startOrResume);
+  pauseBtn.addEventListener("click", pause);
+  resetBtn.addEventListener("click", reset);
+
+  reasonEl.addEventListener("change", updateConsensusButtons);
+  otherTextEl.addEventListener("input", updateConsensusButtons);
+
+  function stopEndMelody(){
+    if (endInterval) {
+      clearInterval(endInterval);
+      endInterval = null;
+    }
+  }
+  add5Btn.addEventListener("click", () => { stopEndMelody(); extend(5); });
+  add10Btn.addEventListener("click", () => { stopEndMelody(); extend(10); });
+  endBtn.addEventListener("click", () => {
+    stopEndMelody();
+    // 延長しない＝会議終了
+    closeConsensus();
+    setStatus("会議終了（延長なし）");
+    setUiState();
+    // 終了を強調（0表示維持）
+    remainingMs = 0;
+    displayEl.textContent = "00:00";
+    updateStageUI();
+  });
+
+  // 入力変更時は待機時のみ反映
+  minEl.addEventListener("input", () => {
+    if (running && !paused) return;
+    if (overlayEl.classList.contains("show")) return;
+    syncFromInputs();
+    setUiState();
+    setStatus("待機中");
+  });
+
+  // 初期化
+  syncFromInputs();
+  setUiState();
+
+
+})();
+</script>
+</body>
+</html>
